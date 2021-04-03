@@ -70,7 +70,7 @@ export const DATA_TYPE_TO_LABEL_AND_ICON: {
     icon: "calendar",
   },
   [models.EnumDataType.Lookup]: {
-    label: "Relation to another Entity",
+    label: "Relation to Entity",
     icon: "lookup",
   },
   [models.EnumDataType.Boolean]: {
@@ -104,7 +104,7 @@ export const DATA_TYPE_TO_LABEL_AND_ICON: {
   },
   [models.EnumDataType.Username]: {
     label: "Username",
-    icon: "users",
+    icon: "user",
   },
   [models.EnumDataType.Password]: {
     label: "Password",
@@ -112,6 +112,6 @@ export const DATA_TYPE_TO_LABEL_AND_ICON: {
   },
   [models.EnumDataType.Roles]: {
     label: "Roles",
-    icon: "roles",
+    icon: "users",
   },
 };

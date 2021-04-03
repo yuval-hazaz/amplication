@@ -116,7 +116,7 @@ function consolidateImports(
  * @param file file AST representation
  * @returns array of import declarations ast nodes
  */
-function extractImportDeclarations(
+export function extractImportDeclarations(
   file: namedTypes.File
 ): namedTypes.ImportDeclaration[] {
   const newBody = [];
@@ -608,6 +608,35 @@ export function findConstructor(
     (member): member is namedTypes.ClassMethod =>
       namedTypes.ClassMethod.check(member) && isConstructor(member)
   );
+}
+
+/**
+ * Add an identifier to the super() call in the constructor
+ * @param classDeclaration
+ */
+export function addIdentifierToConstructorSuperCall(
+  ast: ASTNode,
+  identifier: namedTypes.Identifier
+): void {
+  recast.visit(ast, {
+    visitClassMethod(path) {
+      const classMethodNode = path.node;
+      if (isConstructor(classMethodNode)) {
+        recast.visit(classMethodNode, {
+          visitCallExpression(path) {
+            const callExpressionNode = path.node;
+
+            if (callExpressionNode.callee.type === "Super") {
+              callExpressionNode.arguments.push(identifier);
+            }
+            this.traverse(path);
+          },
+        });
+      }
+
+      this.traverse(path);
+    },
+  });
 }
 
 export function getMethods(

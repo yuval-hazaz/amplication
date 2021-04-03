@@ -1,14 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  FindOneEntityFieldArgs,
-  SortOrder,
-  FindOneEntityVersionArgs,
-  EntityVersionCreateArgs,
-  EnumEntityAction
-} from '@prisma/client';
+import { Prisma, EnumEntityAction } from '@prisma/client';
 import { camelCase } from 'camel-case';
 import { pick, omit } from 'lodash';
 import {
+  createEntityNamesWhereInput,
   DELETE_ONE_USER_ENTITY_ERROR_MESSAGE,
   EntityPendingChange,
   EntityService,
@@ -199,7 +194,7 @@ const prismaEntityUpdateMock = jest.fn(() => {
 });
 
 const prismaEntityVersionFindOneMock = jest.fn(
-  (args: FindOneEntityVersionArgs) => {
+  (args: Prisma.EntityVersionFindUniqueArgs) => {
     const entityVersionList = [
       EXAMPLE_CURRENT_ENTITY_VERSION,
       EXAMPLE_LAST_ENTITY_VERSION
@@ -228,7 +223,7 @@ const prismaEntityVersionFindOneMock = jest.fn(
 );
 
 const prismaEntityVersionFindManyMock = jest.fn(
-  (args: FindOneEntityVersionArgs) => {
+  (args: Prisma.EntityVersionFindUniqueArgs) => {
     if (args.include?.entity) {
       return [
         { ...EXAMPLE_CURRENT_ENTITY_VERSION, entity: EXAMPLE_LOCKED_ENTITY },
@@ -241,7 +236,7 @@ const prismaEntityVersionFindManyMock = jest.fn(
 );
 
 const prismaEntityVersionCreateMock = jest.fn(
-  (args: EntityVersionCreateArgs) => {
+  (args: Prisma.EntityVersionCreateArgs) => {
     return {
       ...EXAMPLE_LAST_ENTITY_VERSION,
       versionNumber: args.data.versionNumber
@@ -257,7 +252,7 @@ const prismaEntityFieldFindManyMock = jest.fn(() => {
 });
 
 const prismaEntityFieldFindFirstMock = jest.fn(
-  (args: FindOneEntityFieldArgs) => {
+  (args: Prisma.EntityFieldFindUniqueArgs) => {
     if (args?.include?.entityVersion) {
       return {
         ...EXAMPLE_ENTITY_FIELD,
@@ -300,7 +295,7 @@ describe('EntityService', () => {
               findMany: prismaEntityVersionFindManyMock,
               create: prismaEntityVersionCreateMock,
               update: prismaEntityVersionUpdateMock,
-              findOne: prismaEntityVersionFindOneMock
+              findUnique: prismaEntityVersionFindOneMock
             },
             entityField: {
               findFirst: prismaEntityFieldFindFirstMock,
@@ -531,7 +526,7 @@ describe('EntityService', () => {
         versions: {
           update: {
             where: {
-              // eslint-disable-next-line @typescript-eslint/camelcase, @typescript-eslint/naming-convention
+              // eslint-disable-next-line  @typescript-eslint/naming-convention
               entityId_versionNumber: {
                 entityId: updateArgs.args.where.id,
                 versionNumber: CURRENT_VERSION_NUMBER
@@ -584,7 +579,7 @@ describe('EntityService', () => {
         entity: { id: EXAMPLE_ENTITY_ID }
       },
       orderBy: {
-        versionNumber: SortOrder.asc
+        versionNumber: Prisma.SortOrder.asc
       }
     };
 
@@ -701,7 +696,7 @@ describe('EntityService', () => {
         entity: { id: EXAMPLE_ENTITY_ID }
       },
       orderBy: {
-        versionNumber: SortOrder.asc
+        versionNumber: Prisma.SortOrder.asc
       },
       include: {
         entity: true
@@ -936,7 +931,10 @@ describe('EntityService', () => {
     ).toEqual(EXAMPLE_ENTITY_FIELD);
     expect(prismaEntityFieldCreateMock).toBeCalledTimes(1);
     expect(prismaEntityFieldCreateMock).toBeCalledWith({
-      data: EXAMPLE_ENTITY_FIELD_DATA
+      data: {
+        ...EXAMPLE_ENTITY_FIELD_DATA,
+        permanentId: expect.any(String)
+      }
     });
   });
   it('should fail to create entity field with bad name', async () => {
@@ -1114,11 +1112,13 @@ describe('EntityService', () => {
     prismaEntityFieldFindManyMock.mockImplementationOnce(() => []);
     const [relatedEntity] = prismaEntityFindManyMock();
     prismaEntityFindManyMock.mockClear();
+    const query = relatedEntity.displayName.toLowerCase();
+    const name = camelCase(query);
     expect(
       await service.createFieldCreateInputByDisplayName(
         {
           data: {
-            displayName: relatedEntity.displayName.toLowerCase(),
+            displayName: query,
             entity: EXAMPLE_ENTITY_WHERE_PARENT_ID
           }
         },
@@ -1133,6 +1133,23 @@ describe('EntityService', () => {
       name: camelCase(relatedEntity.displayName)
     });
     expect(prismaEntityFindManyMock).toBeCalledTimes(1);
+    expect(prismaEntityFindManyMock).toBeCalledWith({
+      where: {
+        ...createEntityNamesWhereInput(name, EXAMPLE_ENTITY.appId),
+        deletedAt: null
+      },
+      take: 1
+    });
+    expect(prismaEntityFieldFindManyMock).toBeCalledTimes(1);
+    expect(prismaEntityFieldFindManyMock).toBeCalledWith({
+      where: {
+        name,
+        entityVersion: {
+          entityId: EXAMPLE_ENTITY_ID,
+          versionNumber: CURRENT_VERSION_NUMBER
+        }
+      }
+    });
   });
   it('create field of plural lookup', async () => {
     prismaEntityFieldFindManyMock.mockImplementationOnce(() => []);
@@ -1158,6 +1175,7 @@ describe('EntityService', () => {
       name: camelCase(query)
     });
     expect(prismaEntityFindManyMock).toBeCalledTimes(1);
+    expect(prismaEntityFieldFindManyMock).toBeCalledTimes(1);
   });
   it('pending changed entities "create"', async () => {
     prismaEntityFindManyMock.mockImplementationOnce(() => [

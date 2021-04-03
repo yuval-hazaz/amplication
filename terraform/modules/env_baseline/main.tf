@@ -226,15 +226,11 @@ resource "google_cloud_run_service" "default" {
         }
         env {
           name  = "GCP_APPS_PROJECT_ID"
-          value = var.apps_project_2
+          value = var.apps_project
         }
         env {
           name  = "CONTAINER_BUILDER_DEFAULT"
           value = var.container_builder_default
-        }
-        env {
-          name  = "GENERATED_APP_BASE_IMAGE"
-          value = var.generated_app_base_image_id
         }
         env {
           name  = "DEPLOYER_DEFAULT"
@@ -246,7 +242,7 @@ resource "google_cloud_run_service" "default" {
         }
         env {
           name  = "GCP_APPS_TERRAFORM_STATE_BUCKET"
-          value = var.apps_terraform_state_bucket_2
+          value = var.apps_terraform_state_bucket
         }
         env {
           name  = "GCP_APPS_DATABASE_INSTANCE"
@@ -279,7 +275,7 @@ resource "google_cloud_run_service" "default" {
           }
         }
       }
-      container_concurrency = 10
+      container_concurrency = 8
       # 2 minutes
       timeout_seconds = 120
     }

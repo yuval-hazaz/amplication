@@ -1,21 +1,14 @@
 /* eslint-disable @typescript-eslint/no-use-before-define */
 
+import cuid from 'cuid';
 import {
   Injectable,
   NotFoundException,
   ConflictException
 } from '@nestjs/common';
 import { DataConflictError } from 'src/errors/DataConflictError';
-import {
-  SortOrder,
-  EntityPermissionCreateManyWithoutEntityVersionInput,
-  EntityVersionInclude,
-  FindManyEntityPermissionArgs,
-  EntityVersionWhereInput,
-  FindManyEntityArgs,
-  QueryMode,
-  FindOneEntityFieldArgs
-} from '@prisma/client';
+import { Prisma } from '@prisma/client';
+import { AmplicationError } from 'src/errors/AmplicationError';
 import { camelCase } from 'camel-case';
 import head from 'lodash.head';
 import last from 'lodash.last';
@@ -33,7 +26,7 @@ import {
 } from 'src/models';
 import { JsonObject } from 'type-fest';
 import { PrismaService } from 'nestjs-prisma';
-import { getSchemaForDataType } from '@amplication/data';
+import { getSchemaForDataType, types } from '@amplication/data';
 import { JsonSchemaValidationService } from 'src/services/jsonSchemaValidation.service';
 import { SchemaValidationResult } from 'src/dto/schemaValidationResult';
 import { EnumDataType } from 'src/enums/EnumDataType';
@@ -61,6 +54,7 @@ import {
   CreateOneEntityFieldArgs,
   CreateOneEntityFieldByDisplayNameArgs,
   UpdateOneEntityFieldArgs,
+  CreateDefaultRelatedFieldArgs,
   EntityFieldCreateInput,
   EntityFieldUpdateInput,
   CreateOneEntityArgs,
@@ -72,8 +66,6 @@ import {
   DeleteEntityFieldArgs,
   UpdateEntityPermissionArgs,
   LockEntityArgs,
-  FindManyEntityFieldArgs,
-  EntityWhereInput,
   UpdateEntityPermissionRolesArgs,
   UpdateEntityPermissionFieldRolesArgs,
   AddEntityPermissionFieldArgs,
@@ -81,17 +73,25 @@ import {
 } from './dto';
 
 type EntityInclude = Omit<
-  EntityVersionInclude,
+  Prisma.EntityVersionInclude,
   'entityFields' | 'entityPermissions' | 'entity'
 > & {
   fields?: boolean;
-  permissions?: boolean | FindManyEntityPermissionArgs;
+  permissions?: boolean | Prisma.EntityPermissionFindManyArgs;
 };
 
 export type BulkEntityFieldData = Omit<
   EntityField,
-  'id' | 'createdAt' | 'updatedAt' | 'permanentId' | 'properties'
-> & { properties: JsonObject };
+  | 'id'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'permanentId'
+  | 'properties'
+  | 'entityVersionId'
+> & {
+  permanentId?: string;
+  properties: JsonObject;
+};
 
 export type BulkEntityData = Omit<
   Entity,
@@ -121,6 +121,15 @@ export const NAME_VALIDATION_ERROR_MESSAGE =
   'Name must only contain letters, numbers, the dollar sign, or the underscore character and must not start with a number';
 
 export const DELETE_ONE_USER_ENTITY_ERROR_MESSAGE = `The 'user' entity is a reserved entity and it cannot be deleted`;
+
+const RELATED_FIELD_ID_DEFINED_NAMES_SHOULD_BE_UNDEFINED_ERROR_MESSAGE =
+  'When data.dataType is Lookup and data.properties.relatedFieldId is defined, relatedFieldName and relatedFieldDisplayName must be null';
+
+const RELATED_FIELD_ID_UNDEFINED_AND_NAMES_UNDEFINED_ERROR_MESSAGE =
+  'When data.dataType is Lookup, either data.properties.relatedFieldId must be defined or relatedFieldName and relatedFieldDisplayName must not be null and not be empty';
+
+const RELATED_FIELD_NAMES_SHOULD_BE_UNDEFINED_ERROR_MESSAGE =
+  'When data.dataType is not Lookup, relatedFieldName and relatedFieldDisplayName must be null';
 
 const BASE_FIELD: Pick<
   EntityField,
@@ -153,7 +162,7 @@ export class EntityService {
     return entity;
   }
 
-  async entities(args: FindManyEntityArgs): Promise<Entity[]> {
+  async entities(args: Prisma.EntityFindManyArgs): Promise<Entity[]> {
     return this.prisma.entity.findMany({
       ...args,
       where: {
@@ -163,13 +172,13 @@ export class EntityService {
     });
   }
 
-  async findFirst(args: FindManyEntityArgs): Promise<Entity | null> {
+  async findFirst(args: Prisma.EntityFindManyArgs): Promise<Entity | null> {
     const [first] = await this.entities({ ...args, take: 1 });
     return first || null;
   }
 
   async getEntitiesByVersions(args: {
-    where: Omit<EntityVersionWhereInput, 'entity'>;
+    where: Omit<Prisma.EntityVersionWhereInput, 'entity'>;
     include?: EntityInclude;
   }): Promise<Entity[]> {
     const { fields, permissions, ...rest } = args.include;
@@ -199,6 +208,15 @@ export class EntityService {
     args: CreateOneEntityArgs,
     user: User
   ): Promise<Entity> {
+    if (
+      args.data?.name?.toLowerCase().trim() ===
+      args.data?.pluralDisplayName?.toLowerCase().trim()
+    ) {
+      throw new AmplicationError(
+        `The entity name and plural display name cannot be the same.`
+      );
+    }
+
     const newEntity = await this.prisma.entity.create({
       data: {
         ...args.data,
@@ -329,6 +347,39 @@ export class EntityService {
   }
 
   /**
+   * Bulk creates fields on existing entities
+   * @param user the user to associate with the entities creation
+   * @param entityId the entity to bulk create fields for
+   * @param fields the fields to create. id must be provided
+   */
+  async bulkCreateFields(
+    user: User,
+    entityId: string,
+    fields: (BulkEntityFieldData & { permanentId: string })[]
+  ): Promise<void> {
+    await this.acquireLock({ where: { id: entityId } }, user);
+
+    await Promise.all(
+      fields.map(field => {
+        return this.prisma.entityField.create({
+          data: {
+            ...field,
+            entityVersion: {
+              connect: {
+                // eslint-disable-next-line @typescript-eslint/naming-convention
+                entityId_versionNumber: {
+                  entityId: entityId,
+                  versionNumber: CURRENT_VERSION_NUMBER
+                }
+              }
+            }
+          }
+        });
+      })
+    );
+  }
+
+  /**
    * Soft delete an entity.
    * This function renames the following fields in order to allow future creation of entities with the same name:
    * name, displayName, pluralDisplayName.
@@ -393,7 +444,7 @@ export class EntityService {
         lockedByUser: true,
         versions: {
           orderBy: {
-            versionNumber: SortOrder.desc
+            versionNumber: Prisma.SortOrder.desc
           },
           /**find the first two versions to decide whether it is an update or a create */
           take: 2
@@ -486,6 +537,19 @@ export class EntityService {
 
     const entity = await this.acquireLock(args, user);
 
+    const newName =
+      args.data.name?.toLowerCase().trim() || entity?.name.toLowerCase().trim();
+
+    const newPluralDisplayName =
+      args.data.pluralDisplayName?.toLowerCase().trim() ||
+      entity?.pluralDisplayName.toLowerCase().trim();
+
+    if (newName === newPluralDisplayName) {
+      throw new AmplicationError(
+        `The entity name and plural display name cannot be the same.`
+      );
+    }
+
     if (entity.name === USER_ENTITY_NAME) {
       if (args.data.name && args.data.name !== USER_ENTITY_NAME) {
         throw new ConflictException(
@@ -528,7 +592,7 @@ export class EntityService {
    */
   async getFields(
     entityId: string,
-    args: FindManyEntityFieldArgs
+    args: Prisma.EntityFieldFindManyArgs
   ): Promise<EntityField[]> {
     return this.getVersionFields(entityId, CURRENT_VERSION_NUMBER, args);
   }
@@ -545,7 +609,7 @@ export class EntityService {
   async getVersionFields(
     entityId: string,
     versionNumber: number,
-    args: FindManyEntityFieldArgs
+    args: Prisma.EntityFieldFindManyArgs
   ): Promise<EntityField[]> {
     return await this.prisma.entityField.findMany({
       ...args,
@@ -623,7 +687,7 @@ export class EntityService {
         entity: { id: entityId }
       },
       orderBy: {
-        versionNumber: SortOrder.asc
+        versionNumber: Prisma.SortOrder.asc
       }
     });
 
@@ -669,7 +733,7 @@ export class EntityService {
         entity: { id: entityId }
       },
       orderBy: {
-        versionNumber: SortOrder.asc
+        versionNumber: Prisma.SortOrder.asc
       },
       include: {
         entity: true
@@ -698,7 +762,7 @@ export class EntityService {
     sourceVersionId: string,
     targetVersionId: string
   ): Promise<EntityVersion> {
-    const sourceVersion = await this.prisma.entityVersion.findOne({
+    const sourceVersion = await this.prisma.entityVersion.findUnique({
       where: {
         id: sourceVersionId
       },
@@ -722,7 +786,7 @@ export class EntityService {
       throw new Error(`Can't find source (Entity Version ${sourceVersionId})`);
     }
 
-    let targetVersion = await this.prisma.entityVersion.findOne({
+    let targetVersion = await this.prisma.entityVersion.findUnique({
       where: {
         id: targetVersionId
       }
@@ -803,7 +867,7 @@ export class EntityService {
     });
 
     //prepare the permissions object
-    const createPermissionsData: EntityPermissionCreateManyWithoutEntityVersionInput = {
+    const createPermissionsData: Prisma.EntityPermissionCreateNestedManyWithoutEntityVersionInput = {
       create: sourceVersion.permissions.map(permission => {
         return {
           action: permission.action,
@@ -868,7 +932,7 @@ export class EntityService {
   }
 
   async getLatestVersions(args: {
-    where: EntityWhereInput;
+    where: Prisma.EntityWhereInput;
   }): Promise<EntityVersion[]> {
     const entities = await this.prisma.entity.findMany({
       where: {
@@ -885,7 +949,7 @@ export class EntityService {
           },
           take: 1,
           orderBy: {
-            versionNumber: SortOrder.desc
+            versionNumber: Prisma.SortOrder.desc
           }
         }
       }
@@ -897,7 +961,7 @@ export class EntityService {
   }
 
   async getVersionCommit(entityVersionId: string): Promise<Commit> {
-    const version = this.prisma.entityVersion.findOne({
+    const version = this.prisma.entityVersion.findUnique({
       where: {
         id: entityVersionId
       }
@@ -955,7 +1019,7 @@ export class EntityService {
   ): Promise<EntityPermission> {
     await this.acquireLock(args, user);
 
-    const entityVersion = await this.prisma.entityVersion.findOne({
+    const entityVersion = await this.prisma.entityVersion.findUnique({
       where: {
         // eslint-disable-next-line @typescript-eslint/naming-convention
         entityId_versionNumber: {
@@ -980,7 +1044,7 @@ export class EntityService {
         type: args.data.type
       },
       where: {
-        // eslint-disable-next-line @typescript-eslint/camelcase,@typescript-eslint/naming-convention
+        // eslint-disable-next-line @typescript-eslint/naming-convention
         entityVersionId_action: {
           entityVersionId: entityVersionId,
           action: args.data.action
@@ -998,7 +1062,7 @@ export class EntityService {
       user
     );
 
-    const entityVersion = await this.prisma.entityVersion.findOne({
+    const entityVersion = await this.prisma.entityVersion.findUnique({
       where: {
         // eslint-disable-next-line @typescript-eslint/naming-convention
         entityId_versionNumber: {
@@ -1026,7 +1090,7 @@ export class EntityService {
       promises.push(
         this.prisma.entityPermission.update({
           where: {
-            // eslint-disable-next-line @typescript-eslint/camelcase,@typescript-eslint/naming-convention
+            // eslint-disable-next-line @typescript-eslint/naming-convention
             entityVersionId_action: {
               entityVersionId: entityVersionId,
               action: args.data.action
@@ -1110,7 +1174,7 @@ export class EntityService {
         action: action
       },
       orderBy: {
-        action: SortOrder.asc
+        action: Prisma.SortOrder.asc
       },
       include: {
         permissionRoles: {
@@ -1151,7 +1215,7 @@ export class EntityService {
       );
     }
 
-    const entityVersion = await this.prisma.entityVersion.findOne({
+    const entityVersion = await this.prisma.entityVersion.findUnique({
       where: {
         // eslint-disable-next-line @typescript-eslint/naming-convention
         entityId_versionNumber: {
@@ -1230,7 +1294,7 @@ export class EntityService {
   ): Promise<EntityPermissionField> {
     const promises: Promise<any>[] = [];
 
-    const field = await this.prisma.entityPermissionField.findOne({
+    const field = await this.prisma.entityPermissionField.findUnique({
       where: {
         id: args.data.permissionField.connect.id
       },
@@ -1304,7 +1368,7 @@ export class EntityService {
     }
     await Promise.all(promises);
 
-    return this.prisma.entityPermissionField.findOne({
+    return this.prisma.entityPermissionField.findUnique({
       where: {
         id: args.data.permissionField.connect.id
       },
@@ -1384,7 +1448,25 @@ export class EntityService {
       ...createInput
     };
 
-    return this.createField({ data }, user);
+    const createFieldArgs: CreateOneEntityFieldArgs = { data };
+
+    // In case created data type is Lookup define related field names according
+    // to the entity
+    if (data.dataType === EnumDataType.Lookup) {
+      const {
+        allowMultipleSelection
+      } = (data.properties as unknown) as types.Lookup;
+
+      createFieldArgs.relatedFieldName = camelCase(
+        !allowMultipleSelection ? entity.pluralDisplayName : entity.name
+      );
+
+      createFieldArgs.relatedFieldDisplayName = !allowMultipleSelection
+        ? entity.pluralDisplayName
+        : entity.displayName;
+    }
+
+    return this.createField(createFieldArgs, user);
   }
 
   async createFieldCreateInputByDisplayName(
@@ -1432,18 +1514,39 @@ export class EntityService {
         properties: {}
       };
     } else {
-      const relatedEntity = await this.findEntityByName(name, entity.appId);
+      // Find an entity with the field's display name
+      const relatedEntity = await this.findEntityByNames(name, entity.appId);
+      // If found attempt to create a lookup field
       if (relatedEntity) {
+        // The created field would be multiple selection if its name is equal to
+        // the related entity's plural display name
         const allowMultipleSelection =
           relatedEntity.pluralDisplayName.toLowerCase() === lowerCaseName;
-        return {
-          name,
-          dataType: EnumDataType.Lookup,
-          properties: {
-            relatedEntityId: relatedEntity.id,
-            allowMultipleSelection
-          }
-        };
+
+        // The related field allow multiple selection should be the opposite of
+        // the field's
+        const relatedFieldAllowMultipleSelection = !allowMultipleSelection;
+
+        // The related field name should resemble the name of the field's entity
+        const relatedFieldName = camelCase(
+          relatedFieldAllowMultipleSelection
+            ? entity.name
+            : entity.pluralDisplayName
+        );
+
+        // If there are no existing fields with the desired name, instruct to create a lookup field
+        if (
+          await this.isFieldNameAvailable(relatedFieldName, relatedEntity.id)
+        ) {
+          return {
+            name,
+            dataType: EnumDataType.Lookup,
+            properties: {
+              relatedEntityId: relatedEntity.id,
+              allowMultipleSelection
+            }
+          };
+        }
       }
     }
     return {
@@ -1455,36 +1558,58 @@ export class EntityService {
     };
   }
 
-  private findEntityByName(name: string, appId: string): Promise<Entity> {
-    return this.findFirst({
-      where: {
-        appId,
-        // eslint-disable-next-line @typescript-eslint/naming-convention
-        AND: [
-          {
-            name: {
-              equals: name,
-              mode: QueryMode.insensitive
-            },
-            // eslint-disable-next-line @typescript-eslint/naming-convention
-            OR: [
-              {
-                displayName: {
-                  equals: name,
-                  mode: QueryMode.insensitive
-                }
-              },
-              {
-                pluralDisplayName: {
-                  equals: name,
-                  mode: QueryMode.insensitive
-                }
-              }
-            ]
-          }
-        ]
+  /**
+   * Check whether a given field name is available in a give entity
+   * @param entityId the entity ID to check name availability in
+   * @param name the name to check availability for
+   * @returns whether the field name is available in the given entity
+   */
+  private async isFieldNameAvailable(
+    name: string,
+    entityId: string
+  ): Promise<boolean> {
+    const existing = await this.getFields(entityId, { where: { name } });
+    return isEmpty(existing);
+  }
+
+  /**
+   * Find entity by its names (name, displayName and pluralDisplayName) in given app
+   * @param name the entity name query
+   * @param appId the app identifier to search entity for
+   * @returns entity with a name matching the given name in the given app
+   */
+  private findEntityByNames(name: string, appId: string): Promise<Entity> {
+    return this.findFirst({ where: createEntityNamesWhereInput(name, appId) });
+  }
+
+  validateFieldMutationArgs(
+    args: CreateOneEntityFieldArgs | UpdateOneEntityFieldArgs,
+    entity: Entity
+  ): void {
+    const { data, relatedFieldName, relatedFieldDisplayName } = args;
+    if (data.dataType === EnumDataType.Lookup) {
+      const { relatedFieldId } = (data.properties as unknown) as types.Lookup;
+      if (
+        !relatedFieldId &&
+        (!relatedFieldName || !relatedFieldDisplayName) &&
+        data.properties.relatedEntityId === entity.id
+      ) {
+        throw new DataConflictError(
+          RELATED_FIELD_ID_UNDEFINED_AND_NAMES_UNDEFINED_ERROR_MESSAGE
+        );
       }
-    });
+      if (relatedFieldId && (relatedFieldName || relatedFieldDisplayName)) {
+        throw new DataConflictError(
+          RELATED_FIELD_ID_DEFINED_NAMES_SHOULD_BE_UNDEFINED_ERROR_MESSAGE
+        );
+      }
+    } else {
+      if (relatedFieldName || relatedFieldDisplayName) {
+        throw new DataConflictError(
+          RELATED_FIELD_NAMES_SHOULD_BE_UNDEFINED_ERROR_MESSAGE
+        );
+      }
+    }
   }
 
   async validateFieldData(
@@ -1516,16 +1641,18 @@ export class EntityService {
       }
     }
 
-    // Validate the field's properties
-    const validationResults = await this.validateFieldProperties(
-      EnumDataType[data.dataType],
-      data.properties
-    );
-
-    if (!validationResults.isValid) {
-      throw new ConflictException(
-        `Cannot validate the Entity Field Properties. ${validationResults.errorText}`
+    // Validate the field's properties (if both are undefined skip the test)
+    if (!(undefined === data.dataType && undefined === data.properties)) {
+      const validationResults = await this.validateFieldProperties(
+        EnumDataType[data.dataType],
+        data.properties
       );
+
+      if (!validationResults.isValid) {
+        throw new ConflictException(
+          `Cannot validate the Entity Field Properties. ${validationResults.errorText}`
+        );
+      }
     }
   }
 
@@ -1542,13 +1669,42 @@ export class EntityService {
       user
     );
 
-    // Validate entity field data
+    // Validate args
+    this.validateFieldMutationArgs(args, entity);
+
+    if (args.data.dataType === EnumDataType.Lookup) {
+      // If field data type is Lookup add relatedFieldId to field properties
+      args.data.properties.relatedFieldId = cuid();
+    }
+
+    // Validate data
     await this.validateFieldData(data, entity);
+
+    // Create field ID ahead of time so it can be used in the related field creation
+    const fieldId = cuid();
+
+    if (args.data.dataType === EnumDataType.Lookup) {
+      // Cast the received properties to Lookup properties type
+      const properties = (args.data.properties as unknown) as types.Lookup;
+
+      // Create a related lookup field in the related entity
+      await this.createRelatedField(
+        properties.relatedFieldId,
+        args.relatedFieldName,
+        args.relatedFieldDisplayName,
+        !properties.allowMultipleSelection,
+        properties.relatedEntityId,
+        entity.id,
+        fieldId,
+        user
+      );
+    }
 
     // Create entity field
     return this.prisma.entityField.create({
       data: {
         ...data,
+        permanentId: fieldId,
         entityVersion: {
           connect: {
             // eslint-disable-next-line @typescript-eslint/naming-convention
@@ -1562,10 +1718,150 @@ export class EntityService {
     });
   }
 
+  /** 2021-02-10
+   * This method is used to fix previous versions of lookup fields
+   * that are missing the property.relatedEntityField value The function will
+   * throw an exception if the provided field already have a related entity
+   * field, or it is a field of a different type other the Lookup
+   */
+  async createDefaultRelatedField(
+    args: CreateDefaultRelatedFieldArgs,
+    user: User
+  ): Promise<EntityField> {
+    // Get field to update
+    const field = await this.getField({
+      where: args.where,
+      include: { entityVersion: true }
+    });
+
+    if (field.dataType != EnumDataType.Lookup) {
+      throw new ConflictException(
+        `Cannot created default related field, because the provided field is not of a relation field`
+      );
+    }
+
+    if (
+      !isEmpty(((field.properties as unknown) as types.Lookup).relatedFieldId)
+    ) {
+      throw new ConflictException(
+        `Cannot created default related field, because the provided field is already related to another field`
+      );
+    }
+
+    // Get the field's entity
+    const entity = await this.acquireLock(
+      { where: { id: field.entityVersion.entityId } },
+      user
+    );
+
+    // Validate args
+    this.validateFieldMutationArgs(
+      {
+        ...args,
+        data: {
+          properties: field.properties as JsonObject,
+          dataType: field.dataType
+        }
+      },
+      entity
+    );
+
+    const relatedFieldId = cuid();
+
+    // Cast the received properties as Lookup properties
+    const properties = (field.properties as unknown) as types.Lookup;
+
+    //create the related field
+    await this.createRelatedField(
+      relatedFieldId,
+      args.relatedFieldName,
+      args.relatedFieldDisplayName,
+      !properties.allowMultipleSelection,
+      properties.relatedEntityId,
+      entity.id,
+      field.permanentId,
+      user
+    );
+
+    properties.relatedFieldId = relatedFieldId;
+
+    //Update the field with the ID of the related field
+    return this.prisma.entityField.update({
+      where: {
+        id: field.id
+      },
+      data: {
+        properties: (properties as unknown) as Prisma.InputJsonValue
+      }
+    });
+  }
+
+  private async createRelatedField(
+    id: string,
+    name: string,
+    displayName: string,
+    allowMultipleSelection: boolean,
+    entityId: string,
+    relatedEntityId: string,
+    relatedFieldId: string,
+    user: User
+  ): Promise<EntityField> {
+    // Acquire lock to edit the entity
+    await this.acquireLock({ where: { id: entityId } }, user);
+
+    return this.prisma.entityField.create({
+      data: {
+        ...BASE_FIELD,
+        name,
+        displayName,
+        dataType: EnumDataType.Lookup,
+        permanentId: id,
+        entityVersion: {
+          connect: {
+            // eslint-disable-next-line @typescript-eslint/naming-convention
+            entityId_versionNumber: {
+              entityId,
+              versionNumber: CURRENT_VERSION_NUMBER
+            }
+          }
+        },
+        properties: {
+          allowMultipleSelection,
+          relatedEntityId,
+          relatedFieldId
+        }
+      }
+    });
+  }
+
+  private async deleteRelatedField(
+    permanentId: string,
+    entityId: string,
+    user: User
+  ): Promise<void> {
+    // Acquire lock to edit the entity
+    await this.acquireLock({ where: { id: entityId } }, user);
+
+    // Get field to delete
+    const field = await this.getField({ where: { permanentId } });
+
+    // Delete the related field from the database
+    await this.prisma.entityField.delete({
+      where: {
+        // eslint-disable-next-line @typescript-eslint/naming-convention
+        entityVersionId_permanentId: {
+          permanentId,
+          entityVersionId: field.entityVersionId
+        }
+      }
+    });
+  }
+
   async updateField(
     args: UpdateOneEntityFieldArgs,
     user: User
   ): Promise<EntityField> {
+    // Get field to update
     const field = await this.getField({
       where: args.where,
       include: { entityVersion: true }
@@ -1577,12 +1873,39 @@ export class EntityService {
       );
     }
 
+    // Delete related field in case field data type is changed from lookup
+    const shouldDeleteRelated =
+      field.dataType === EnumDataType.Lookup &&
+      args.data.dataType !== EnumDataType.Lookup;
+
+    // Create related field in case field data type is changed to lookup
+    const shouldCreateRelated =
+      args.data.dataType === EnumDataType.Lookup &&
+      field.dataType !== EnumDataType.Lookup;
+
+    // Change related field in case related entity ID is changed
+    const shouldChangeRelated =
+      !shouldCreateRelated &&
+      !shouldDeleteRelated &&
+      args.data.properties?.relatedEntityId !==
+        ((field.properties as unknown) as types.Lookup)?.relatedEntityId;
+
+    // Get the field's entity
     const entity = await this.acquireLock(
       { where: { id: field.entityVersion.entityId } },
       user
     );
 
-    // Validate entity field data
+    // Validate args
+    this.validateFieldMutationArgs(args, entity);
+
+    // In case related field should be created or changed, assign properties a
+    // new related field ID
+    if (shouldCreateRelated || shouldChangeRelated) {
+      args.data.properties.relatedFieldId = cuid();
+    }
+
+    // Validate data
     await this.validateFieldData(args.data, entity);
 
     /**
@@ -1590,7 +1913,38 @@ export class EntityService {
      * fields that were already published can be updated
      */
 
-    return this.prisma.entityField.update(args);
+    // In case related field should be deleted or changed, delete the existing related field
+    if (shouldDeleteRelated || shouldChangeRelated) {
+      const properties = (field.properties as unknown) as types.Lookup;
+
+      /**@todo: when the field should be changed and we delete it, we loose the permanent ID and links to previous versions  */
+      await this.deleteRelatedField(
+        properties.relatedFieldId,
+        properties.relatedEntityId,
+        user
+      );
+    }
+
+    // In case related field should be created or changed, create a new related field
+    if (shouldCreateRelated || shouldChangeRelated) {
+      // Cast the received properties as Lookup properties
+      const properties = (args.data.properties as unknown) as types.Lookup;
+
+      await this.createRelatedField(
+        properties.relatedFieldId,
+        args.relatedFieldName,
+        args.relatedFieldDisplayName,
+        !properties.allowMultipleSelection,
+        properties.relatedEntityId,
+        entity.id,
+        field.permanentId,
+        user
+      );
+    }
+
+    return this.prisma.entityField.update(
+      omit(args, ['relatedFieldName', 'relatedFieldDisplayName'])
+    );
   }
 
   async deleteField(
@@ -1619,6 +1973,25 @@ export class EntityService {
       user
     );
 
+    if (field.dataType === EnumDataType.Lookup) {
+      // Cast the field properties as Lookup properties
+      const properties = (field.properties as unknown) as types.Lookup;
+      try {
+        await this.deleteRelatedField(
+          properties.relatedFieldId,
+          properties.relatedEntityId,
+          user
+        );
+      } catch (error) {
+        //continue to delete the field even if the deletion of the related field failed.
+        //This is done in order to allow the user to workaround issues in any case when a related field is missing
+        console.log(
+          'Continue with FieldDelete even though the related field could not be deleted or was not found ',
+          error
+        );
+      }
+    }
+
     return this.prisma.entityField.delete(args);
   }
 
@@ -1626,9 +1999,12 @@ export class EntityService {
    * Gets a field according to provided arguments.
    * @param args arguments to find field according to
    * @returns the entity field
-   * @throws {NotFoundException} thrown if the field is not found
+   * @throws {NotFoundException} thrown if the field is not found or it relates
+   * to a past entity version
    */
-  private async getField(args: FindOneEntityFieldArgs): Promise<EntityField> {
+  private async getField(
+    args: Prisma.EntityFieldFindFirstArgs
+  ): Promise<EntityField> {
     const field = await this.prisma.entityField.findFirst({
       ...args,
       where: {
@@ -1640,7 +2016,7 @@ export class EntityService {
     });
     if (!field) {
       throw new NotFoundException(
-        `Could not find an entity field for the args: ${JSON.stringify(args)}`
+        `Could not find an entity field for: ${JSON.stringify(args.where)}`
       );
     }
     return field;
@@ -1663,4 +2039,37 @@ function isReservedUserEntityFieldName(name: string): boolean {
 
 function isUserEntity(entity: Entity): boolean {
   return entity.name === USER_ENTITY_NAME;
+}
+
+export function createEntityNamesWhereInput(
+  name: string,
+  appId: string
+): Prisma.EntityWhereInput {
+  return {
+    appId,
+    // eslint-disable-next-line @typescript-eslint/naming-convention
+    AND: [
+      {
+        name: {
+          equals: name,
+          mode: Prisma.QueryMode.insensitive
+        },
+        // eslint-disable-next-line @typescript-eslint/naming-convention
+        OR: [
+          {
+            displayName: {
+              equals: name,
+              mode: Prisma.QueryMode.insensitive
+            }
+          },
+          {
+            pluralDisplayName: {
+              equals: name,
+              mode: Prisma.QueryMode.insensitive
+            }
+          }
+        ]
+      }
+    ]
+  };
 }

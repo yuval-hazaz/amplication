@@ -5,7 +5,8 @@ import * as winston from 'winston';
 import { PrismaService } from 'nestjs-prisma';
 import { StorageService } from '@codebrew/nestjs-storage';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
-import { SortOrder } from '@prisma/client';
+import { orderBy } from 'lodash';
+import { Prisma } from '@prisma/client';
 import {
   ACTION_JOB_DONE_LOG,
   GENERATE_STEP_MESSAGE,
@@ -38,7 +39,7 @@ import {
   EnumBuildStatus as ContainerBuildStatus
 } from '@amplication/container-builder/dist/';
 import { EnumBuildStatus } from 'src/core/build/dto/EnumBuildStatus';
-import { App, Commit } from 'src/models';
+import { App, Commit, Entity } from 'src/models';
 import {
   ActionStep,
   EnumActionLogLevel,
@@ -71,7 +72,7 @@ const EXAMPLE_COMMIT_ID = 'exampleCommitId';
 const EXAMPLE_BUILD_ID = 'ExampleBuildId';
 const EXAMPLE_USER_ID = 'ExampleUserId';
 const EXAMPLE_ENTITY_VERSION_ID = 'ExampleEntityVersionId';
-const EXAMPLE_APP_ID = 'ExampleAppId';
+const EXAMPLE_APP_ID = 'exampleAppId';
 const EXAMPLE_DATE = new Date('2020-01-01');
 
 const JOB_STARTED_LOG = 'Build job started';
@@ -281,7 +282,29 @@ const entityServiceGetLatestVersionsMock = jest.fn(() => {
   return [{ id: EXAMPLE_ENTITY_VERSION_ID }];
 });
 
-const EXAMPLE_ENTITIES = [];
+const EXAMPLE_FIRST_ENTITY_NAME = 'AA First Entity';
+const EXAMPLE_SECOND_ENTITY_NAME = 'BB second Entity';
+
+const EXAMPLE_ENTITIES: Entity[] = [
+  {
+    id: 'EXAMPLE_SECOND_ID',
+    createdAt: new Date('2020-02-17 18:20:20'),
+    updatedAt: new Date(),
+    appId: 'exampleAppId',
+    name: EXAMPLE_SECOND_ENTITY_NAME,
+    displayName: 'Second entity',
+    pluralDisplayName: 'Second entity plural display name'
+  },
+  {
+    id: 'EXAMPLE_FIRST_ID',
+    createdAt: new Date('2020-02-10 18:20:20'), //created first
+    updatedAt: new Date(),
+    appId: 'exampleAppId',
+    name: EXAMPLE_FIRST_ENTITY_NAME,
+    displayName: 'First entity',
+    pluralDisplayName: 'First entity plural display name'
+  }
+];
 
 const entityServiceGetEntitiesByVersionsMock = jest.fn(() => EXAMPLE_ENTITIES);
 
@@ -342,8 +365,8 @@ const EXAMPLE_LOCAL_DISK = {
 
 const localDiskServiceGetDiskMock = jest.fn(() => EXAMPLE_LOCAL_DISK);
 
-const EXAMPLED_GENERATED_BASE_IMAGE = 'EXAMPLED_GENERATED_BASE_IMAGE';
-const configServiceGetMock = jest.fn(() => EXAMPLED_GENERATED_BASE_IMAGE);
+const EXAMPLED_HOST = 'http://localhost';
+const configServiceGetMock = jest.fn(() => EXAMPLED_HOST);
 
 const loggerErrorMock = jest.fn(error => {
   // Write the error to console so it will be visible for who runs the test
@@ -388,7 +411,7 @@ describe('BuildService', () => {
             build: {
               create: prismaBuildCreateMock,
               findMany: prismaBuildFindManyMock,
-              findOne: prismaBuildFindOneMock,
+              findUnique: prismaBuildFindOneMock,
               update: prismaBuildUpdateMock
             }
           }
@@ -590,12 +613,14 @@ describe('BuildService', () => {
     });
     expect(DataServiceGenerator.createDataService).toBeCalledTimes(1);
     expect(DataServiceGenerator.createDataService).toBeCalledWith(
-      EXAMPLE_ENTITIES,
+      orderBy(EXAMPLE_ENTITIES, entity => entity.createdAt),
       EXAMPLE_APP_ROLES,
       {
         name: EXAMPLE_APP.name,
         description: EXAMPLE_APP.description,
-        version: EXAMPLE_BUILD.version
+        version: EXAMPLE_BUILD.version,
+        id: EXAMPLE_APP.id,
+        url: `${EXAMPLED_HOST}/${EXAMPLE_APP.id}`
       },
       MOCK_LOGGER
     );
@@ -636,10 +661,7 @@ describe('BuildService', () => {
         `${EXAMPLE_BUILD.appId}:${EXAMPLE_BUILD.id}`,
         `${EXAMPLE_BUILD.appId}:latest`
       ],
-      cacheFrom: [
-        EXAMPLED_GENERATED_BASE_IMAGE,
-        `${EXAMPLE_BUILD.appId}:latest`
-      ],
+      cacheFrom: [`${EXAMPLE_BUILD.appId}:latest`],
       url: EXAMPLE_URL
     });
     expect(prismaBuildUpdateMock).toBeCalledTimes(1);
@@ -866,7 +888,7 @@ describe('BuildService', () => {
         }
       },
       orderBy: {
-        createdAt: SortOrder.asc
+        createdAt: Prisma.SortOrder.asc
       },
       include: ACTION_INCLUDE
     };
@@ -919,7 +941,7 @@ describe('BuildService', () => {
         }
       },
       orderBy: {
-        createdAt: SortOrder.asc
+        createdAt: Prisma.SortOrder.asc
       },
       include: ACTION_INCLUDE
     };

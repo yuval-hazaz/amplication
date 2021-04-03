@@ -1,5 +1,5 @@
 import React from "react";
-import { Switch, Route, match } from "react-router-dom";
+import { Switch, Route, match, useLocation } from "react-router-dom";
 import { gql, useQuery } from "@apollo/client";
 import { Snackbar } from "@rmwc/snackbar";
 import "@rmwc/snackbar/styles";
@@ -13,10 +13,12 @@ import SyncWithGithubPage from "../Settings/SyncWithGithubPage";
 import "./ApplicationHome.scss";
 import SyncWithGithubTile from "./SyncWithGithubTile";
 import EntitiesTile from "./EntitiesTile";
+import NewVersionTile from "./NewVersionTile";
 import RolesTile from "./RolesTile";
 import { COLOR_TO_NAME } from "./constants";
 import useNavigationTabs from "../Layout/UseNavigationTabs";
 import InnerTabLink from "../Layout/InnerTabLink";
+import { ApiTokenList } from "../Settings/ApiTokenList";
 
 type Props = {
   match: match<{ application: string }>;
@@ -27,6 +29,7 @@ const NAVIGATION_KEY = "APP_HOME";
 
 function ApplicationHome({ match }: Props) {
   const applicationId = match.params.application;
+  const location = useLocation();
 
   const { data, error } = useQuery<{
     app: models.App;
@@ -35,7 +38,12 @@ function ApplicationHome({ match }: Props) {
       id: applicationId,
     },
   });
-  useNavigationTabs(NAVIGATION_KEY, match.url, data?.app.name);
+  useNavigationTabs(
+    applicationId,
+    NAVIGATION_KEY,
+    location.pathname,
+    data?.app.name
+  );
 
   const errorMessage = formatError(error);
 
@@ -59,10 +67,16 @@ function ApplicationHome({ match }: Props) {
               Sync with GitHub
             </InnerTabLink>
           </div>
+          <div>
+            <InnerTabLink to={`/${applicationId}/api-tokens`} icon="id">
+              API Tokens
+            </InnerTabLink>
+          </div>
         </>
       }
     >
       <Switch>
+        <Route path="/:application/api-tokens" component={ApiTokenList} />
         <Route path="/:application/github" component={SyncWithGithubPage} />
         <Route
           path="/:application/"
@@ -86,6 +100,7 @@ function ApplicationHome({ match }: Props) {
                   path="/:application/"
                   component={() => (
                     <div className={`${CLASS_NAME}__tiles`}>
+                      <NewVersionTile applicationId={applicationId} />
                       <EntitiesTile applicationId={applicationId} />
                       <RolesTile applicationId={applicationId} />
                       <SyncWithGithubTile applicationId={applicationId} />

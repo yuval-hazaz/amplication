@@ -5,7 +5,6 @@ import { gql, useMutation } from "@apollo/client";
 import { formatError } from "../util/error";
 import { GET_PENDING_CHANGES } from "./PendingChanges";
 import { Button, EnumButtonStyle } from "../Components/Button";
-import imageNotice from "../assets/images/notice.svg";
 import PendingChangesContext from "../VersionControl/PendingChangesContext";
 import "./DiscardChanges.scss";
 
@@ -21,6 +20,19 @@ const DiscardChanges = ({ applicationId, onComplete, onCancel }: Props) => {
   const pendingChangesContext = useContext(PendingChangesContext);
 
   const [discardChanges, { error, loading }] = useMutation(DISCARD_CHANGES, {
+    update(cache, { data }) {
+      if (!data) return;
+
+      //remove entities from cache to reflect discarded changes
+      for (var change of pendingChangesContext.pendingChanges) {
+        cache.evict({
+          id: cache.identify({
+            id: change.resourceId,
+            __typename: "Entity",
+          }),
+        });
+      }
+    },
     onCompleted: (data) => {
       pendingChangesContext.reset();
       onComplete();
@@ -48,7 +60,6 @@ const DiscardChanges = ({ applicationId, onComplete, onCancel }: Props) => {
   return (
     <div className={CLASS_NAME}>
       <div className={`${CLASS_NAME}__content`}>
-        <img src={imageNotice} alt="notice" />
         <div>
           <div className={`${CLASS_NAME}__content__title`}>Please Notice</div>
           <div className={`${CLASS_NAME}__content__instructions`}>

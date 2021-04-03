@@ -4,12 +4,12 @@ import { Storage, MethodNotSupported } from '@slynova/flydrive';
 import { GoogleCloudStorage } from '@slynova/flydrive-gcs';
 import { StorageService } from '@codebrew/nestjs-storage';
 import { subSeconds } from 'date-fns';
-import { SortOrder } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { WINSTON_MODULE_PROVIDER } from 'nest-winston';
 import * as winston from 'winston';
 import { LEVEL, MESSAGE, SPLAT } from 'triple-beam';
-import { groupBy, omit } from 'lodash';
+import { groupBy, omit, orderBy } from 'lodash';
 import path from 'path';
 import * as DataServiceGenerator from '@amplication/data-service-generator';
 import { ContainerBuilderService } from '@amplication/container-builder/dist/nestjs';
@@ -45,7 +45,6 @@ import { StepNotFoundError } from './errors/StepNotFoundError';
 import { GithubService } from '../github/github.service';
 
 export const HOST_VAR = 'HOST';
-export const GENERATED_APP_BASE_IMAGE_VAR = 'GENERATED_APP_BASE_IMAGE';
 export const GENERATE_STEP_MESSAGE = 'Generating Application';
 export const GENERATE_STEP_NAME = 'GENERATE_APPLICATION';
 export const BUILD_DOCKER_IMAGE_STEP_MESSAGE = 'Building Docker image';
@@ -143,8 +142,6 @@ const CONTAINER_STATUS_UPDATE_INTERVAL_SEC = 10;
 
 @Injectable()
 export class BuildService {
-  generatedAppBaseImage: string;
-
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -162,10 +159,6 @@ export class BuildService {
   ) {
     /** @todo move this to storageService config once possible */
     this.storageService.registerDriver('gcs', GoogleCloudStorage);
-
-    this.generatedAppBaseImage = this.configService.get(
-      GENERATED_APP_BASE_IMAGE_VAR
-    );
   }
 
   async create(args: CreateBuildArgs, skipPublish?: boolean): Promise<Build> {
@@ -224,7 +217,7 @@ export class BuildService {
   }
 
   async findOne(args: FindOneBuildArgs): Promise<Build | null> {
-    return this.prisma.build.findOne(args);
+    return this.prisma.build.findUnique(args);
   }
 
   /**
@@ -258,7 +251,7 @@ export class BuildService {
         }
       },
       orderBy: {
-        createdAt: SortOrder.asc
+        createdAt: Prisma.SortOrder.asc
       },
       include: ACTION_INCLUDE
     });
@@ -297,7 +290,7 @@ export class BuildService {
     buildId: string
   ): Promise<ActionStep | undefined> {
     const [generateStep] = await this.prisma.build
-      .findOne({
+      .findUnique({
         where: {
           id: buildId
         }
@@ -313,7 +306,7 @@ export class BuildService {
   }
 
   async calcBuildStatus(buildId): Promise<EnumBuildStatus> {
-    const build = await this.prisma.build.findOne({
+    const build = await this.prisma.build.findUnique({
       where: {
         id: buildId
       },
@@ -368,7 +361,7 @@ export class BuildService {
       GENERATE_STEP_NAME,
       GENERATE_STEP_MESSAGE,
       async step => {
-        const entities = await this.getEntities(build.id);
+        const entities = await this.getOrderedEntities(build.id);
         const roles = await this.getAppRoles(build);
         const app = await this.appService.app({ where: { id: build.appId } });
         const [
@@ -376,13 +369,19 @@ export class BuildService {
           logPromises
         ] = this.createDataServiceLogger(build, step);
 
+        const host = this.configService.get(HOST_VAR);
+
+        const url = `${host}/${build.appId}`;
+
         const modules = await DataServiceGenerator.createDataService(
           entities,
           roles,
           {
             name: app.name,
             description: app.description,
-            version: build.version
+            version: build.version,
+            id: build.appId,
+            url
           },
           dataServiceGeneratorLogger
         );
@@ -429,7 +428,7 @@ export class BuildService {
         );
         const result = await this.containerBuilderService.build({
           tags: [tag, latestTag],
-          cacheFrom: [this.generatedAppBaseImage, latestImageId],
+          cacheFrom: [latestImageId],
           url: tarballURL
         });
         await this.handleContainerBuilderResult(build, step, result);
@@ -565,9 +564,7 @@ export class BuildService {
         `${commit.message} (Amplication build ${truncateBuildId})`) ||
       `Amplication build ${truncateBuildId}`;
 
-    const host = (this.generatedAppBaseImage = this.configService.get(
-      HOST_VAR
-    ));
+    const host = this.configService.get(HOST_VAR);
 
     const url = `${host}/${build.appId}/builds/${build.id}`;
 
@@ -655,7 +652,8 @@ ${url}
     await this.actionService.log(step, level, message, meta);
   }
 
-  private async getEntities(
+  //this function must always return the entities in the same order to prevent unintended code changes
+  private async getOrderedEntities(
     buildId: string
   ): Promise<DataServiceGenerator.Entity[]> {
     const entities = await this.entityService.getEntitiesByVersions({
@@ -668,6 +666,9 @@ ${url}
       },
       include: ENTITIES_INCLUDE
     });
-    return entities as DataServiceGenerator.Entity[];
+    return orderBy(
+      entities,
+      entity => entity.createdAt
+    ) as DataServiceGenerator.Entity[];
   }
 }

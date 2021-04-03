@@ -12,6 +12,7 @@
     "camelcase",
     "checkmark",
     "deepdash",
+    "dtos",
     "linkcode",
     "nestjs",
     "rmwc",
@@ -20,6 +21,7 @@
     "teleporter",
     "uncontained",
     "unelevated",
+    "unmark",
     "upsert"
   ],
   "eslint.workingDirectories": [

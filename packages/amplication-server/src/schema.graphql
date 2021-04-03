@@ -37,6 +37,21 @@ type ActionStep {
   logs: [ActionLog!]
 }
 
+type ApiToken {
+  id: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  name: String!
+  userId: String!
+  token: String
+  previewChars: String!
+  lastAccessAt: DateTime!
+}
+
+input ApiTokenCreateInput {
+  name: String!
+}
+
 type App {
   id: String!
   createdAt: DateTime!
@@ -122,6 +137,18 @@ input AppUpdateInput {
   name: String
   description: String
   color: String
+}
+
+enum AppValidationErrorTypes {
+  CannotMergeCodeToGitHubBreakingChanges
+  CannotMergeCodeToGitHubInvalidAppId
+  DataServiceGeneratorVersionMissing
+  DataServiceGeneratorVersionInvalid
+}
+
+type AppValidationResult {
+  isValid: Boolean!
+  messages: [AppValidationErrorTypes!]!
 }
 
 input AppWhereInput {
@@ -1000,10 +1027,11 @@ type Mutation {
   addEntityPermissionField(data: EntityAddPermissionFieldInput!): EntityPermissionField!
   deleteEntityPermissionField(where: EntityPermissionFieldWhereUniqueInput!): EntityPermissionField!
   updateEntityPermissionFieldRoles(data: EntityUpdatePermissionFieldRolesInput!): EntityPermissionField!
-  createEntityField(data: EntityFieldCreateInput!): EntityField!
+  createEntityField(data: EntityFieldCreateInput!, relatedFieldName: String, relatedFieldDisplayName: String): EntityField!
   createEntityFieldByDisplayName(data: EntityFieldCreateByDisplayNameInput!): EntityField!
   deleteEntityField(where: WhereUniqueInput!): EntityField!
-  updateEntityField(data: EntityFieldUpdateInput!, where: WhereUniqueInput!): EntityField!
+  updateEntityField(data: EntityFieldUpdateInput!, where: WhereUniqueInput!, relatedFieldName: String, relatedFieldDisplayName: String): EntityField!
+  createDefaultRelatedField(where: WhereUniqueInput!, relatedFieldName: String, relatedFieldDisplayName: String): EntityField!
   createAppRole(data: AppRoleCreateInput!): AppRole!
   deleteAppRole(where: WhereUniqueInput!): AppRole
   updateAppRole(data: AppRoleUpdateInput!, where: WhereUniqueInput!): AppRole
@@ -1021,7 +1049,9 @@ type Mutation {
   appDisableSyncWithGithubRepo(where: WhereUniqueInput!): App!
   signup(data: SignupInput!): Auth!
   login(data: LoginInput!): Auth!
+  createApiToken(data: ApiTokenCreateInput!): ApiToken!
   changePassword(data: ChangePasswordInput!): Account!
+  deleteApiToken(where: WhereUniqueInput!): ApiToken!
   setCurrentOrganization(data: WhereUniqueInput!): Auth!
   createConnectorRestApi(data: ConnectorRestApiCreateInput!): ConnectorRestApi!
   updateConnectorRestApi(data: BlockUpdateInput!, where: WhereUniqueInput!): ConnectorRestApi!
@@ -1105,9 +1135,11 @@ type Query {
   apps(where: AppWhereInput, orderBy: AppOrderByInput, skip: Int, take: Int): [App!]!
   pendingChanges(where: PendingChangesFindInput!): [PendingChange!]!
   appAvailableGithubRepos(where: AvailableGithubReposFindInput!): [GithubRepo!]!
+  appValidateBeforeCommit(where: WhereUniqueInput!): AppValidationResult!
   commit(where: CommitWhereUniqueInput!): Commit
   commits(where: CommitWhereInput, orderBy: CommitOrderByInput, cursor: CommitWhereUniqueInput, take: Int, skip: Int): [Commit!]
   me: User!
+  userApiTokens: [ApiToken!]!
   ConnectorRestApi(where: WhereUniqueInput!, version: Float): ConnectorRestApi
   ConnectorRestApis(where: ConnectorRestApiWhereInput, orderBy: ConnectorRestApiOrderByInput, skip: Int, take: Int): [ConnectorRestApi!]!
   blockVersions(where: BlockVersionWhereInput, orderBy: BlockVersionOrderByInput, skip: Int, take: Int): [BlockVersion!]!

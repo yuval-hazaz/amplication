@@ -6,10 +6,10 @@ import {
   ScalarField,
   ScalarType,
 } from "prisma-schema-dsl";
-import { EntityField, Entity } from "../../../types";
+import { Entity, EntityField } from "../../../types";
 import {
   createEnumName,
-  createPrismaField,
+  createPrismaFields,
 } from "../../prisma/create-prisma-schema";
 import { classProperty, createGenericArray } from "../../../util/ast";
 import { isEnumField, isOneToOneRelationField } from "../../../util/field";
@@ -77,12 +77,12 @@ export const NULLABLE_ID = builders.identifier("nullable");
 
 export function createFieldClassProperty(
   field: EntityField,
+  entity: Entity,
   optional: boolean,
   isInput: boolean,
-  isQuery: boolean,
-  entity: Entity
+  isQuery: boolean
 ): namedTypes.ClassProperty {
-  const prismaField = createPrismaField(field, entity);
+  const [prismaField] = createPrismaFields(field, entity);
   const id = builders.identifier(field.name);
   const isEnum = isEnumField(field);
   const type = createFieldValueTypeFromPrismaField(
@@ -105,7 +105,10 @@ export function createFieldClassProperty(
   if (prismaField.isList && prismaField.kind === FieldKind.Object) {
     optional = true;
   }
-  const optionalProperty = optional && isInput;
+  const optionalProperty =
+    //all relation fields on entity dto (not input) are optional
+    (prismaField.kind === FieldKind.Object && !isInput) ||
+    (optional && (isInput || prismaField.kind === FieldKind.Object));
   const definitive = !optionalProperty;
 
   if (prismaField.kind === FieldKind.Scalar) {
@@ -196,7 +199,7 @@ export function createFieldClassProperty(
   if (
     prismaField.kind !== FieldKind.Object ||
     isEnum ||
-    (isInput && !isQuery && isOneToOneRelationField(field))
+    (isInput && isOneToOneRelationField(field))
   ) {
     decorators.push(
       createGraphQLFieldDecorator(prismaField, isEnum, field, optional, entity)

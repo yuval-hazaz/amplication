@@ -54,6 +54,22 @@ export type ActionStep = {
   logs?: Maybe<Array<ActionLog>>;
 };
 
+export type ApiToken = {
+  __typename?: "ApiToken";
+  id: Scalars["String"];
+  createdAt: Scalars["DateTime"];
+  updatedAt: Scalars["DateTime"];
+  name: Scalars["String"];
+  userId: Scalars["String"];
+  token?: Maybe<Scalars["String"]>;
+  previewChars: Scalars["String"];
+  lastAccessAt: Scalars["DateTime"];
+};
+
+export type ApiTokenCreateInput = {
+  name: Scalars["String"];
+};
+
 export type App = {
   __typename?: "App";
   id: Scalars["String"];
@@ -65,12 +81,12 @@ export type App = {
   entities: Array<Entity>;
   environments: Array<Environment>;
   builds: Array<Build>;
-  githubTokenCreatedDate: Scalars["DateTime"];
+  githubTokenCreatedDate?: Maybe<Scalars["DateTime"]>;
   githubSyncEnabled: Scalars["Boolean"];
-  githubRepo: Scalars["String"];
-  githubBranch: Scalars["String"];
-  githubLastSync: Scalars["DateTime"];
-  githubLastMessage: Scalars["String"];
+  githubRepo?: Maybe<Scalars["String"]>;
+  githubBranch?: Maybe<Scalars["String"]>;
+  githubLastSync?: Maybe<Scalars["DateTime"]>;
+  githubLastMessage?: Maybe<Scalars["String"]>;
 };
 
 export type AppEntitiesArgs = {
@@ -154,6 +170,19 @@ export type AppUpdateInput = {
   name?: Maybe<Scalars["String"]>;
   description?: Maybe<Scalars["String"]>;
   color?: Maybe<Scalars["String"]>;
+};
+
+export enum AppValidationErrorTypes {
+  CannotMergeCodeToGitHubBreakingChanges = "CannotMergeCodeToGitHubBreakingChanges",
+  CannotMergeCodeToGitHubInvalidAppId = "CannotMergeCodeToGitHubInvalidAppId",
+  DataServiceGeneratorVersionMissing = "DataServiceGeneratorVersionMissing",
+  DataServiceGeneratorVersionInvalid = "DataServiceGeneratorVersionInvalid",
+}
+
+export type AppValidationResult = {
+  __typename?: "AppValidationResult";
+  isValid: Scalars["Boolean"];
+  messages: Array<AppValidationErrorTypes>;
 };
 
 export type AppWhereInput = {
@@ -1013,9 +1042,9 @@ export type GithubRepo = {
   __typename?: "GithubRepo";
   name: Scalars["String"];
   url: Scalars["String"];
-  private: Scalars["String"];
+  private: Scalars["Boolean"];
   fullName: Scalars["String"];
-  admin: Scalars["String"];
+  admin: Scalars["Boolean"];
 };
 
 export type HttpBasicAuthenticationSettings = {
@@ -1086,6 +1115,7 @@ export type Mutation = {
   createEntityFieldByDisplayName: EntityField;
   deleteEntityField: EntityField;
   updateEntityField: EntityField;
+  createDefaultRelatedField: EntityField;
   createAppRole: AppRole;
   deleteAppRole?: Maybe<AppRole>;
   updateAppRole?: Maybe<AppRole>;
@@ -1097,11 +1127,15 @@ export type Mutation = {
   commit?: Maybe<Commit>;
   discardPendingChanges?: Maybe<Scalars["Boolean"]>;
   startAuthorizeAppWithGithub: AuthorizeAppWithGithubResult;
-  completeAuthorizeAppWithGithub: Scalars["Boolean"];
+  completeAuthorizeAppWithGithub: App;
+  removeAuthorizeAppWithGithub: App;
   appEnableSyncWithGithubRepo: App;
+  appDisableSyncWithGithubRepo: App;
   signup: Auth;
   login: Auth;
+  createApiToken: ApiToken;
   changePassword: Account;
+  deleteApiToken: ApiToken;
   setCurrentOrganization: Auth;
   createConnectorRestApi: ConnectorRestApi;
   updateConnectorRestApi: ConnectorRestApi;
@@ -1169,6 +1203,8 @@ export type MutationUpdateEntityPermissionFieldRolesArgs = {
 
 export type MutationCreateEntityFieldArgs = {
   data: EntityFieldCreateInput;
+  relatedFieldName?: Maybe<Scalars["String"]>;
+  relatedFieldDisplayName?: Maybe<Scalars["String"]>;
 };
 
 export type MutationCreateEntityFieldByDisplayNameArgs = {
@@ -1182,6 +1218,14 @@ export type MutationDeleteEntityFieldArgs = {
 export type MutationUpdateEntityFieldArgs = {
   data: EntityFieldUpdateInput;
   where: WhereUniqueInput;
+  relatedFieldName?: Maybe<Scalars["String"]>;
+  relatedFieldDisplayName?: Maybe<Scalars["String"]>;
+};
+
+export type MutationCreateDefaultRelatedFieldArgs = {
+  where: WhereUniqueInput;
+  relatedFieldName?: Maybe<Scalars["String"]>;
+  relatedFieldDisplayName?: Maybe<Scalars["String"]>;
 };
 
 export type MutationCreateAppRoleArgs = {
@@ -1235,8 +1279,16 @@ export type MutationCompleteAuthorizeAppWithGithubArgs = {
   where: WhereUniqueInput;
 };
 
+export type MutationRemoveAuthorizeAppWithGithubArgs = {
+  where: WhereUniqueInput;
+};
+
 export type MutationAppEnableSyncWithGithubRepoArgs = {
   data: AppEnableSyncWithGithubRepoInput;
+  where: WhereUniqueInput;
+};
+
+export type MutationAppDisableSyncWithGithubRepoArgs = {
   where: WhereUniqueInput;
 };
 
@@ -1248,8 +1300,16 @@ export type MutationLoginArgs = {
   data: LoginInput;
 };
 
+export type MutationCreateApiTokenArgs = {
+  data: ApiTokenCreateInput;
+};
+
 export type MutationChangePasswordArgs = {
   data: ChangePasswordInput;
+};
+
+export type MutationDeleteApiTokenArgs = {
+  where: WhereUniqueInput;
 };
 
 export type MutationSetCurrentOrganizationArgs = {
@@ -1365,9 +1425,11 @@ export type Query = {
   apps: Array<App>;
   pendingChanges: Array<PendingChange>;
   appAvailableGithubRepos: Array<GithubRepo>;
+  appValidateBeforeCommit: AppValidationResult;
   commit?: Maybe<Commit>;
   commits?: Maybe<Array<Commit>>;
   me: User;
+  userApiTokens: Array<ApiToken>;
   ConnectorRestApi?: Maybe<ConnectorRestApi>;
   ConnectorRestApis: Array<ConnectorRestApi>;
   blockVersions: Array<BlockVersion>;
@@ -1448,6 +1510,10 @@ export type QueryPendingChangesArgs = {
 
 export type QueryAppAvailableGithubReposArgs = {
   where: AvailableGithubReposFindInput;
+};
+
+export type QueryAppValidateBeforeCommitArgs = {
+  where: WhereUniqueInput;
 };
 
 export type QueryCommitArgs = {

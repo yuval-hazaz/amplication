@@ -15,7 +15,7 @@ const NAVIGATION_KEY = "ROLE";
 const RolesPage = ({ match }: Props) => {
   const { application } = match.params;
 
-  useNavigationTabs(NAVIGATION_KEY, match.url, "Roles");
+  useNavigationTabs(application, NAVIGATION_KEY, match.url, "Roles");
 
   const roleMatch = useRouteMatch<{ roleId: string }>(
     "/:application/roles/:roleId"
@@ -29,7 +29,9 @@ const RolesPage = ({ match }: Props) => {
   return (
     <PageContent
       className="roles"
-      sideContent={<RoleList applicationId={application} />}
+      sideContent={
+        <RoleList applicationId={application} selectFirst={null === roleId} />
+      }
     >
       {!isEmpty(roleId) && <Role />}
     </PageContent>

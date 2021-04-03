@@ -1,6 +1,6 @@
 {
   "name": "@amplication/design-system",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "main": "dist/index.js",
   "scripts": {
     "storybook": "start-storybook -p 6006",
@@ -17,6 +17,7 @@
     "@rmwc/data-table": "^6.1.4",
     "@rmwc/drawer": "^6.1.4",
     "@rmwc/icon": "^6.1.4",
+    "@rmwc/radio": "^6.1.4",
     "@rmwc/snackbar": "^6.1.4",
     "@rmwc/tooltip": "^6.1.4",
     "@types/lodash": "^4.14.162",
@@ -47,6 +48,7 @@
     "eslint-plugin-jsx-a11y": "^6.4.1",
     "eslint-plugin-react": "^7.21.5",
     "eslint-plugin-react-hooks": "^4.2.0",
+    "formik": "^2.2.5",
     "prettier": "^2.1.2",
     "react-is": "^16.13.1",
     "react-scripts": "3.4.1",
